@@ -14,5 +14,6 @@ For each claim you get: id, area, claim text, the verbatim quote, the source, an
    - `source_type`: `primary` if the claim's source is a regulator, official register, court, or the company's own filing, official site or docs; otherwise `secondary`.
    - `corroborating_url`: a URL from your counter-search results, on a **different** domain than the claim's source, that independently confirms the claim. Always provide it when such a result exists: confidence can only be High when a claim is confirmed by two independent domains or comes from a primary source.
    - `counter_evidence_url` (optional): a URL from your counter-search results that contradicts the claim. Provide it for `contested` when available.
+   - `adverse_event`: `true` if the claim describes a negative event for the entity — a fine, lawsuit, regulatory investigation or action, data breach or security incident, outage, layoffs or losses. Funding, investments, partnerships, customers, products and policy positions are `false`.
 
 Be strict. A good fact-checker downgrades the weakest claims. Never mark a claim supported just because it sounds plausible.

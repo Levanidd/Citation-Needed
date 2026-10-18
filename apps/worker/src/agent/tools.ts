@@ -1,7 +1,7 @@
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
 import { z } from "zod";
 import { TavilyError } from "../clients/tavily.ts";
-import { LIMITS } from "../config.ts";
+import { DEADLINES, LIMITS } from "../config.ts";
 import { AgentError } from "../errors.ts";
 import type { ClaimPublic, Source } from "../types.ts";
 import { truncate } from "../util.ts";
@@ -37,6 +37,15 @@ export const researcherTools: ChatCompletionTool[] = [
     ["areas"],
   ),
   searchTool,
+  fn(
+    "news_search",
+    "Adverse media screening: search news from the last 12 months (Tavily news index) for fines, lawsuits, regulatory actions, data breaches, outages, layoffs or financial trouble. Returns titles, URLs, publication dates and snippets.",
+    {
+      query: { type: "string", description: "Entity name plus risk terms, e.g. \"Acme fine OR lawsuit OR breach OR investigation\"" },
+      reason: reasonProp,
+    },
+    ["query", "reason"],
+  ),
   fn(
     "read_page",
     "Read a web page (Tavily extract). Returns the most relevant ~6k characters of its text. Read a page before quoting it.",
@@ -115,16 +124,20 @@ export async function runResearcherTool(ctx: RunContext, call: ToolCall): Promis
       case "plan_areas":
         return planAreas(ctx, call.arguments);
       case "web_search":
-        return await webSearch(ctx, call.arguments);
+        return await webSearch(ctx, call.arguments, "research");
+      case "news_search":
+        return await webSearch(ctx, call.arguments, "news");
       case "read_page":
         return await readPage(ctx, call.arguments);
       case "record_claim":
       case "record_claims":
         return await recordClaims(ctx, call.arguments);
       case "finish_research":
-        return { content: "Research finished.", finish: true };
+        return finishResearch(ctx);
       default:
-        return { content: `Unknown tool "${call.name}". Available: plan_areas, web_search, read_page, record_claim, finish_research.` };
+        return {
+          content: `Unknown tool "${call.name}". Available: plan_areas, web_search, news_search, read_page, record_claim, finish_research.`,
+        };
     }
   } catch (err) {
     if (err instanceof AgentError || ctx.signal.aborted) throw err;
@@ -132,6 +145,20 @@ export async function runResearcherTool(ctx: RunContext, call: ToolCall): Promis
     ctx.log({ step: "tool_error", tool: call.name, error: message });
     return { content: `Tool failed: ${message}` };
   }
+}
+
+/** Refuses the first finish if no adverse-media search ran and there is still time for one. */
+function finishResearch(ctx: RunContext): ToolOutcome {
+  const canScan =
+    ctx.counters.newsSearches === 0 && ctx.canSubrequest(4) && ctx.elapsed() < DEADLINES.research - 15_000;
+  if (canScan && !ctx.newsReminderSent) {
+    ctx.newsReminderSent = true;
+    return {
+      content:
+        "Not finished yet: run news_search once to screen adverse media (fines, lawsuits, breaches, regulatory actions) from the last 12 months, record any incident you find, then call finish_research.",
+    };
+  }
+  return { content: "Research finished.", finish: true };
 }
 
 export function finishReason(call: ToolCall): string {
@@ -150,35 +177,45 @@ async function planAreas(ctx: RunContext, raw: string): Promise<ToolOutcome> {
 }
 
 function budgetLine(ctx: RunContext): string {
-  return `Budget left: ${LIMITS.searches - ctx.counters.searches} searches, ${LIMITS.reads - ctx.counters.reads} page reads, ${LIMITS.claims - ctx.claims.length} claims.`;
+  return `Budget left: ${LIMITS.searches - ctx.counters.searches} searches, ${LIMITS.newsSearches - ctx.counters.newsSearches} news searches, ${LIMITS.reads - ctx.counters.reads} page reads, ${LIMITS.claims - ctx.claims.length} claims.`;
 }
 
-async function webSearch(ctx: RunContext, raw: string): Promise<ToolOutcome> {
+async function webSearch(ctx: RunContext, raw: string, kind: "research" | "news"): Promise<ToolOutcome> {
   const args = parseArgs(SearchArgs, raw);
   if (!args.ok) return { content: `Invalid arguments: ${args.error}` };
-  if (ctx.counters.searches >= LIMITS.searches || !ctx.canSubrequest(2)) {
-    return { content: "Search budget exhausted. Record claims from what you have, then call finish_research." };
+  const news = kind === "news";
+  const exhausted = news ? ctx.counters.newsSearches >= LIMITS.newsSearches : ctx.counters.searches >= LIMITS.searches;
+  if (exhausted || !ctx.canSubrequest(2)) {
+    return {
+      content: news
+        ? "News search budget exhausted. Record claims from what you have found."
+        : "Search budget exhausted. Record claims from what you have, then call finish_research.",
+    };
   }
   const step = ctx.nextStep();
-  await ctx.emit("decision", { step, tool: "search", input: args.data.query, reason: args.data.reason, phase: "research" });
+  await ctx.emit("decision", { step, tool: news ? "news" : "search", input: args.data.query, reason: args.data.reason, phase: "research" });
   const t = Date.now();
   try {
-    const hits = await ctx.search(args.data.query, "research");
+    const hits = await ctx.search(args.data.query, kind);
     const newSources = [];
     const lines: string[] = [];
     for (const hit of hits) {
-      const { source, isNew } = ctx.source(hit.url, hit.title, hit.snippet);
+      const { source, isNew } = ctx.source(hit.url, hit.title, hit.snippet, hit.published);
       if (isNew) newSources.push(publicSource(source));
-      lines.push(`[${source.id}] ${source.title}\nURL: ${source.url}\n${truncate(hit.snippet.replace(/\s+/g, " "), 500)}`);
+      const date = hit.published ? `\nPublished: ${hit.published}` : "";
+      lines.push(`[${source.id}] ${source.title}\nURL: ${source.url}${date}\n${truncate(hit.snippet.replace(/\s+/g, " "), 500)}`);
     }
     const domains = [...new Set(hits.map((h) => ctx.findSource(h.url)?.domain ?? ""))].filter(Boolean);
-    await ctx.emit("tool_result", {
-      step,
-      summary: hits.length ? `${hits.length} results · ${domains.slice(0, 4).join(", ")}` : "No results",
-      newSources,
-      ms: Date.now() - t,
-      ok: true,
-    });
+    const newest = hits.map((h) => h.published ?? "").sort().at(-1) || undefined;
+    if (news) ctx.newsScans.push({ query: args.data.query, results: hits.length, newest });
+    const summary = !hits.length
+      ? news
+        ? "No news in the last 12 months"
+        : "No results"
+      : news
+        ? `${hits.length} news${newest ? ` · newest ${newest}` : ""} · ${domains.slice(0, 3).join(", ")}`
+        : `${hits.length} results · ${domains.slice(0, 4).join(", ")}`;
+    await ctx.emit("tool_result", { step, summary, newSources, ms: Date.now() - t, ok: true });
     if (!hits.length) return { content: `No results for "${args.data.query}". Try a different query. ${budgetLine(ctx)}` };
     return { content: `Results for "${args.data.query}":\n\n${lines.join("\n\n")}\n\n${budgetLine(ctx)}` };
   } catch (err) {

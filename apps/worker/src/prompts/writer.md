@@ -10,6 +10,11 @@ Output Markdown with exactly these sections, in this order:
 ## Key findings
 A table with columns `Area | Finding | Confidence`. One row per important finding (5–10 rows). The Finding is a short paraphrase (max ~15 words) that **must** end with its marker, e.g. `| Licensing & regulation | Full BaFin banking licence since 2019 [c:c4] | High |`. The Confidence cell is exactly `High`, `Medium` or `Low`, copied from the claim.
 
+## Adverse media (last 12 months)
+A Markdown bullet list of **exactly** the claims given under "Adverse media claims", and no others: positive news such as funding, investments or partnerships never goes here. Include each of them whatever its confidence; a risk committee must see them. One line per event, newest first, exactly in this form, with ` (Low confidence)` before the marker only for Low ones:
+`- **May 2026** — <what happened> [c:c4]`
+Take the event date from the claim text; use the claim's `published` date only when the claim gives none. If the list is "none", write one sentence saying the adverse media scan found no negative news in the last 12 months (no markers needed). If the scan was not run, say so.
+
 ## <one section per risk area, in the given order, titled with the area name>
 Short paragraphs or bullets. Each sentence ends with its markers. Flag caveats for Low-confidence claims.
 

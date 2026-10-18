@@ -1,9 +1,45 @@
+import type { ModelNames, Usage } from "@worker/types.ts";
 import { useEffect, useRef, useState } from "react";
-import { formatDuration } from "../lib/format.ts";
+import { formatCredits, formatDuration, formatTokens, formatUsd, modelLabel } from "../lib/format.ts";
 import type { Run } from "../lib/useResearch.ts";
 import { TraceStep } from "./TraceStep.tsx";
 
 const PHASE_STATUS = { research: "Researching", factcheck: "Fact-checking", writing: "Writing report" } as const;
+const ROLE_LABEL: Record<keyof ModelNames, string> = { research: "Research", check: "Fact-check", write: "Writer" };
+
+function UsageMeter({ usage, live }: { usage: Usage; live: boolean }) {
+  const tokens = usage.promptTokens + usage.completionTokens;
+  const total = usage.llmCostUsd === undefined ? undefined : usage.llmCostUsd + usage.tavilyCostUsd;
+  const breakdown = (Object.keys(ROLE_LABEL) as (keyof ModelNames)[])
+    .filter((role) => usage.byRole[role].calls > 0)
+    .map((role) => {
+      const r = usage.byRole[role];
+      const cost = r.costUsd === undefined ? "" : `, ${formatUsd(r.costUsd)}`;
+      return `${ROLE_LABEL[role]} · ${modelLabel(r.model).name}: ${r.calls} calls, ${formatTokens(r.promptTokens + r.completionTokens)} tokens${cost}`;
+    })
+    .join("\n");
+  return (
+    <div
+      className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl bg-surface-2/60 px-3 py-1.5 text-xs text-muted tabular-nums"
+      title={breakdown}
+    >
+      <span>
+        <span className="font-semibold text-fg">{formatTokens(tokens)}</span> tokens
+      </span>
+      <span>
+        LLM <span className="font-semibold text-fg">{usage.llmCostUsd === undefined ? "–" : formatUsd(usage.llmCostUsd)}</span>
+      </span>
+      <span>
+        Tavily <span className="font-semibold text-fg">{formatCredits(usage.tavilyCredits)}</span> credits
+      </span>
+      {total !== undefined && (
+        <span className="ml-auto">
+          ≈ <span className="font-semibold text-accent">{formatUsd(total)}</span> {live ? "so far" : "per report"}
+        </span>
+      )}
+    </div>
+  );
+}
 
 function useNow(active: boolean) {
   const [now, setNow] = useState(Date.now());
@@ -72,6 +108,7 @@ export function TracePanel({ run }: { run: Run }) {
             </div>
           ))}
         </div>
+        {run.usage && <UsageMeter usage={run.usage} live={live} />}
       </header>
       <div
         ref={listRef}
@@ -86,13 +123,13 @@ export function TracePanel({ run }: { run: Run }) {
         ) : (
           <ol className="relative before:absolute before:top-2 before:bottom-2 before:left-[18px] before:w-px before:bg-line">
             {run.trace.map((item) => (
-              <TraceStep key={item.key} item={item} claims={run.claims} live={live} />
+              <TraceStep key={item.key} item={item} claims={run.claims} models={run.models} live={live} />
             ))}
           </ol>
         )}
         {run.models && (
           <p className="px-2 pt-2 pb-1 text-[11px] text-subtle">
-            Models: research {run.models.research} · check {run.models.check} · write {run.models.write}
+            Models on Nebius Token Factory: research {run.models.research} · check {run.models.check} · write {run.models.write}
           </p>
         )}
       </div>

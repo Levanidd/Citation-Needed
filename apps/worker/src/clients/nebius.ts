@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import type { CompletionUsage } from "openai/resources/completions";
 import type {
   ChatCompletion,
   ChatCompletionCreateParamsNonStreaming,
@@ -7,7 +8,8 @@ import type {
   ChatCompletionTool,
   ChatCompletionToolChoiceOption,
 } from "openai/resources/chat/completions";
-import { type Role, TIMEOUTS, roleConfigs, roleExtraBody } from "../config.ts";
+import { z } from "zod";
+import { DEFAULT_NEBIUS_BASE_URL, type Role, TIMEOUTS, roleConfigs, roleExtraBody } from "../config.ts";
 import { AgentError } from "../errors.ts";
 import { withTimeout } from "../util.ts";
 
@@ -58,6 +60,7 @@ export class Llm {
     messages: ChatCompletionMessageParam[],
     opts: Omit<CompleteOptions, "tools" | "toolChoice">,
     signal: AbortSignal,
+    onUsage?: (usage: CompletionUsage) => void,
   ): AsyncGenerator<string> {
     const body = {
       ...this.extra,
@@ -66,12 +69,14 @@ export class Llm {
       max_tokens: opts.maxTokens ?? 3000,
       temperature: opts.temperature ?? 0.3,
       stream: true,
+      stream_options: { include_usage: true },
     } as ChatCompletionCreateParamsStreaming;
     let thinking = false;
     let pending = "";
     try {
       const stream = await this.client.chat.completions.create(body, { signal });
       for await (const chunk of stream) {
+        if (chunk.usage) onUsage?.(chunk.usage);
         pending += chunk.choices[0]?.delta?.content ?? "";
         let out = "";
         while (pending) {
@@ -130,6 +135,41 @@ export class Llm {
       return new AgentError("nebius_timeout", `The ${this.role} model did not answer within 60s.`, true);
     }
     return err;
+  }
+}
+
+/** USD per token. */
+export interface ModelPrice {
+  prompt: number;
+  completion: number;
+}
+
+const ModelList = z.object({
+  data: z.array(
+    z.object({
+      id: z.string(),
+      pricing: z.object({ prompt: z.coerce.number(), completion: z.coerce.number() }).nullish().catch(undefined),
+    }),
+  ),
+});
+
+let priceCache: Map<string, ModelPrice> | undefined;
+
+/** Per-token prices from the Token Factory model list, cached per isolate. `fetched` = a request was made. */
+export async function modelPrices(env: Env, signal: AbortSignal): Promise<{ prices: Map<string, ModelPrice>; fetched: boolean }> {
+  if (priceCache) return { prices: priceCache, fetched: false };
+  try {
+    const base = (env.NEBIUS_BASE_URL || DEFAULT_NEBIUS_BASE_URL).replace(/\/$/, "");
+    const res = await fetch(`${base}/models?verbose=true`, {
+      headers: { authorization: `Bearer ${env.NEBIUS_API_KEY}` },
+      signal: withTimeout(signal, TIMEOUTS.prices),
+    });
+    const parsed = res.ok ? ModelList.safeParse(await res.json()) : undefined;
+    if (!parsed?.success) return { prices: new Map(), fetched: true };
+    priceCache = new Map(parsed.data.data.flatMap((m) => (m.pricing ? [[m.id, m.pricing] as const] : [])));
+    return { prices: priceCache, fetched: true };
+  } catch {
+    return { prices: new Map(), fetched: true };
   }
 }
 

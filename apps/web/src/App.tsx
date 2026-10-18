@@ -44,7 +44,7 @@ export default function App() {
         <div className="mx-auto flex h-14 max-w-[1440px] items-center justify-between px-4 sm:px-6">
           <Logo />
           <nav className="flex items-center gap-4 text-xs text-muted">
-            <span className="hidden sm:inline">Nebius Token Factory · Nemotron · Tavily</span>
+            <span className="hidden sm:inline">Nebius Token Factory · Nemotron × Reflection Beam · Tavily</span>
             <a href={REPO_URL} target="_blank" rel="noreferrer" className="font-medium text-fg hover:text-accent">
               GitHub
             </a>

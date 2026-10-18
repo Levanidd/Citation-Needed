@@ -1,4 +1,10 @@
-import type { ChatCompletionMessageParam, ChatCompletionTool } from "openai/resources/chat/completions";
+import type {
+  ChatCompletionAssistantMessageParam,
+  ChatCompletionMessage,
+  ChatCompletionMessageParam,
+  ChatCompletionMessageToolCall,
+  ChatCompletionTool,
+} from "openai/resources/chat/completions";
 import { z } from "zod";
 import { DEADLINES, LIMITS } from "../config.ts";
 import { AgentError } from "../errors.ts";
@@ -31,6 +37,11 @@ const submitTool: ChatCompletionTool = {
                 description: "URL from your counter-search results, on a different domain, that confirms the claim. Provide whenever one exists.",
               },
               counter_evidence_url: { type: "string", description: "Optional: URL that contradicts the claim" },
+              adverse_event: {
+                type: "boolean",
+                description:
+                  "true if the claim describes a negative event: fine, lawsuit, regulatory investigation or action, data breach or security incident, outage, layoffs or losses",
+              },
             },
             required: ["claim_id", "verdict", "note", "source_type"],
           },
@@ -113,10 +124,22 @@ const VerdictItem = z.object({
   source_type: z.preprocess((v) => (typeof v === "string" ? v.toLowerCase().trim() : v), z.enum(["primary", "secondary"])).catch("secondary"),
   corroborating_url: z.string().trim().nullish(),
   counter_evidence_url: z.string().trim().nullish(),
+  adverse_event: z.preprocess((v) => (typeof v === "string" ? v.trim().toLowerCase() === "true" : v), z.boolean()).catch(false),
 });
 const SubmitArgs = z.object({ verdicts: z.array(z.unknown()) });
 
 type VerdictInput = z.infer<typeof VerdictItem>;
+
+/** Reasoning models such as Reflection Beam reject follow-up turns whose earlier assistant messages lack their reasoning_content. */
+function assistantTurn(message: ChatCompletionMessage, toolCalls?: ChatCompletionMessageToolCall[]): ChatCompletionAssistantMessageParam {
+  const reasoning = (message as { reasoning_content?: unknown }).reasoning_content;
+  return {
+    role: "assistant",
+    content: message.content ?? "",
+    ...(toolCalls ? { tool_calls: toolCalls } : {}),
+    ...(typeof reasoning === "string" && reasoning ? { reasoning_content: reasoning } : {}),
+  } as ChatCompletionAssistantMessageParam;
+}
 
 function describeClaims(ctx: RunContext): string {
   const lines = ctx.claims.map((c) => {
@@ -243,7 +266,7 @@ export async function factCheck(ctx: RunContext): Promise<void> {
       if (!message) continue;
       const { calls, native } = extractToolCalls(message);
       if (calls.length === 0) {
-        messages.push({ role: "assistant", content: message.content ?? "" });
+        messages.push(assistantTurn(message));
         messages.push({
           role: "user",
           content: force
@@ -272,14 +295,15 @@ export async function factCheck(ctx: RunContext): Promise<void> {
       }
 
       if (native) {
-        messages.push({
-          role: "assistant",
-          content: message.content ?? "",
-          tool_calls: calls.map((c) => ({ id: c.id, type: "function" as const, function: { name: c.name, arguments: c.arguments } })),
-        });
+        messages.push(
+          assistantTurn(
+            message,
+            calls.map((c) => ({ id: c.id, type: "function" as const, function: { name: c.name, arguments: c.arguments } })),
+          ),
+        );
         for (const call of calls) messages.push({ role: "tool", tool_call_id: call.id, content: outputs.get(call.id) ?? "" });
       } else {
-        messages.push({ role: "assistant", content: message.content ?? "" });
+        messages.push(assistantTurn(message));
         messages.push({
           role: "user",
           content: calls.map((c) => `Result of ${c.name}:\n${outputs.get(c.id)}`).join("\n\n"),
@@ -323,6 +347,7 @@ function applyVerdict(ctx: RunContext, claim: ClaimPublic, v: VerdictInput | und
   if (counter && counter.id !== claim.sourceId) claim.counterEvidence = [{ sourceId: counter.id, note }];
 
   claim.primarySource = isPrimaryDomain(domain) || v?.source_type === "primary";
+  if (v?.adverse_event) claim.adverse = true;
   claim.verdict = verdict;
   claim.note = note;
   claim.confidence = computeConfidence({

@@ -1,8 +1,9 @@
 import type { ChatCompletion, ChatCompletionMessageParam } from "openai/resources/chat/completions";
-import { type CompleteOptions, type Llm, createModels } from "../clients/nebius.ts";
+import type { CompletionUsage } from "openai/resources/completions";
+import { type CompleteOptions, type Llm, type ModelPrice, createModels, modelPrices } from "../clients/nebius.ts";
 import { type SearchHit, type TavilyConfig, tavilyExtract, tavilySearch } from "../clients/tavily.ts";
-import { DEADLINES, LIMITS, type Role, modelNames } from "../config.ts";
-import type { ClaimPublic, EventMap, EventType, RunStats, Source, SourcePublic } from "../types.ts";
+import { DEADLINES, LIMITS, type Role, TAVILY_USD_PER_CREDIT, modelNames } from "../config.ts";
+import type { ClaimPublic, EventMap, EventType, RoleUsage, RunStats, Source, SourcePublic, Usage } from "../types.ts";
 import { canonicalUrl, domainOf } from "../util.ts";
 import { type PreparedPage, preparePage } from "./verifier.ts";
 
@@ -25,12 +26,25 @@ export class RunContext {
   readonly counters = {
     step: 0,
     searches: 0,
+    newsSearches: 0,
     counterSearches: 0,
     reads: 0,
     autoExtracts: 0,
     llmCalls: 0,
     subrequests: 0,
   };
+
+  /** Adverse-media scans, summarized for the writer. */
+  readonly newsScans: { query: string; results: number; newest?: string }[] = [];
+  newsReminderSent = false;
+
+  private readonly tokens: Record<Role, { calls: number; prompt: number; completion: number }> = {
+    research: { calls: 0, prompt: 0, completion: 0 },
+    check: { calls: 0, prompt: 0, completion: 0 },
+    write: { calls: 0, prompt: 0, completion: 0 },
+  };
+  private tavilyCredits = 0;
+  private prices = new Map<string, ModelPrice>();
 
   private closed = false;
 
@@ -82,19 +96,69 @@ export class RunContext {
     this.counters.llmCalls++;
     const t = Date.now();
     try {
-      return await this.models[role].complete(messages, opts, this.signal);
+      const response = await this.models[role].complete(messages, opts, this.signal);
+      this.addTokens(role, response.usage);
+      await this.emitUsage();
+      return response;
     } finally {
       this.log({ step: "llm", role, ms: Date.now() - t });
     }
   }
 
-  async search(query: string, kind: "research" | "counter"): Promise<SearchHit[]> {
+  addTokens(role: Role, usage: CompletionUsage | undefined): void {
+    const t = this.tokens[role];
+    t.calls++;
+    t.prompt += usage?.prompt_tokens ?? 0;
+    t.completion += usage?.completion_tokens ?? 0;
+  }
+
+  /** Model prices come from the Token Factory model list; until they arrive, cost is undefined. */
+  async loadPrices(): Promise<void> {
+    const { prices, fetched } = await modelPrices(this.env, this.signal);
+    if (fetched) this.counters.subrequests++;
+    this.prices = prices;
+  }
+
+  usage(): Usage {
+    const names = this.modelNames;
+    const byRole = {} as Record<Role, RoleUsage>;
+    let llmCostUsd: number | undefined = 0;
+    let promptTokens = 0;
+    let completionTokens = 0;
+    for (const role of ["research", "check", "write"] as const) {
+      const t = this.tokens[role];
+      const price = this.prices.get(names[role]);
+      const costUsd = price ? t.prompt * price.prompt + t.completion * price.completion : undefined;
+      byRole[role] = { model: names[role], calls: t.calls, promptTokens: t.prompt, completionTokens: t.completion, costUsd };
+      promptTokens += t.prompt;
+      completionTokens += t.completion;
+      if (t.calls > 0) llmCostUsd = costUsd === undefined || llmCostUsd === undefined ? undefined : llmCostUsd + costUsd;
+    }
+    return {
+      byRole,
+      promptTokens,
+      completionTokens,
+      llmCostUsd,
+      tavilyCredits: this.tavilyCredits,
+      tavilyCostUsd: this.tavilyCredits * TAVILY_USD_PER_CREDIT,
+    };
+  }
+
+  emitUsage(): Promise<void> {
+    return this.emit("usage", this.usage());
+  }
+
+  async search(query: string, kind: "research" | "news" | "counter"): Promise<SearchHit[]> {
     this.counters.subrequests++;
     if (kind === "research") this.counters.searches++;
+    else if (kind === "news") this.counters.newsSearches++;
     else this.counters.counterSearches++;
     const t = Date.now();
     try {
-      return await tavilySearch(this.tavily, query, this.signal);
+      const { hits, credits } = await tavilySearch(this.tavily, query, this.signal, { news: kind === "news" });
+      this.tavilyCredits += credits;
+      await this.emitUsage();
+      return hits;
     } finally {
       this.log({ step: "search", kind, query, ms: Date.now() - t });
     }
@@ -107,7 +171,8 @@ export class RunContext {
     this.counters.subrequests++;
     const t = Date.now();
     try {
-      const { pages, failed } = await tavilyExtract(this.tavily, [source.url], this.signal);
+      const { pages, failed, credits } = await tavilyExtract(this.tavily, [source.url], this.signal);
+      this.tavilyCredits += credits;
       const page = pages[0];
       if (!page) {
         this.log({ step: "extract", url: source.url, ok: false, error: failed[0]?.error, ms: Date.now() - t });
@@ -132,16 +197,17 @@ export class RunContext {
     return page;
   }
 
-  source(url: string, title?: string, snippet?: string): { source: Source; isNew: boolean } {
+  source(url: string, title?: string, snippet?: string, published?: string): { source: Source; isNew: boolean } {
     const key = canonicalUrl(url);
     const existing = this.byUrl.get(key);
     if (existing) {
       if (title && existing.title === existing.domain) existing.title = title.trim();
       if (snippet && !existing.snippet) existing.snippet = snippet;
+      if (published && !existing.published) existing.published = published;
       return { source: existing, isNew: false };
     }
     const domain = domainOf(url);
-    const source: Source = { id: this.sources.length + 1, url, title: title?.trim() || domain, domain, snippet };
+    const source: Source = { id: this.sources.length + 1, url, title: title?.trim() || domain, domain, snippet, published };
     this.sources.push(source);
     this.byUrl.set(key, source);
     return { source, isNew: true };
@@ -160,6 +226,7 @@ export class RunContext {
     return {
       durationMs: this.elapsed(),
       searches: this.counters.searches,
+      newsSearches: this.counters.newsSearches,
       counterSearches: this.counters.counterSearches,
       pagesRead: this.sources.filter((s) => s.content).length,
       claims: this.claims.length,
@@ -167,6 +234,7 @@ export class RunContext {
       verifiedPct: this.claims.length ? Math.round((verified / this.claims.length) * 100) : 0,
       sources: this.sources.length,
       llmCalls: this.counters.llmCalls,
+      usage: this.usage(),
     };
   }
 }

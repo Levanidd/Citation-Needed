@@ -15,6 +15,7 @@ export interface SourcePublic {
 export interface Source extends SourcePublic {
   content?: string; // extracted page text, server-only
   snippet?: string; // search snippet, server-only
+  published?: string; // YYYY-MM-DD for news results, server-only
 }
 
 export interface Claim {
@@ -27,6 +28,7 @@ export interface Claim {
   verdict?: Verdict;
   confidence?: Confidence;
   note?: string; // fact-checker note
+  adverse?: boolean; // negative event (fine, lawsuit, breach, outage…), flagged by the fact-checker
   primarySource?: boolean;
   corroboratingSourceIds?: number[];
   counterEvidence?: { sourceId: number; note: string }[];
@@ -42,9 +44,27 @@ export interface ModelNames {
   write: string;
 }
 
+export interface RoleUsage {
+  model: string;
+  calls: number;
+  promptTokens: number;
+  completionTokens: number;
+  costUsd?: number; // undefined while the model's price is unknown
+}
+
+export interface Usage {
+  byRole: Record<keyof ModelNames, RoleUsage>;
+  promptTokens: number;
+  completionTokens: number;
+  llmCostUsd?: number;
+  tavilyCredits: number;
+  tavilyCostUsd: number;
+}
+
 export interface RunStats {
   durationMs: number;
   searches: number;
+  newsSearches: number;
   counterSearches: number;
   pagesRead: number;
   claims: number;
@@ -52,6 +72,7 @@ export interface RunStats {
   verifiedPct: number;
   sources: number;
   llmCalls: number;
+  usage: Usage;
 }
 
 export interface ErrorPayload {
@@ -66,7 +87,7 @@ export interface EventMap {
   plan: { areas: string[] };
   decision: {
     step: number;
-    tool: "search" | "read";
+    tool: "search" | "news" | "read";
     input: string;
     reason: string;
     phase: Phase;
@@ -78,6 +99,7 @@ export interface EventMap {
   research_done: { reason: string; claimCount: number };
   factcheck: { claimId: string; verdict: Verdict; confidence: Confidence; note: string };
   report_delta: { text: string };
+  usage: Usage;
   done: { report: string; claims: ClaimPublic[]; sources: SourcePublic[]; stats: RunStats };
   error: ErrorPayload;
 }

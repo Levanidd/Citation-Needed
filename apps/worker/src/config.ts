@@ -3,6 +3,8 @@ import type { ModelNames } from "./types.ts";
 export const LIMITS = {
   researchTurns: 18,
   searches: 8,
+  // Adverse-media searches (Tavily news topic), on top of the regular search budget.
+  newsSearches: 2,
   reads: 6,
   claims: 20,
   // Pages fetched implicitly to verify a quote from a page the agent never read.
@@ -25,7 +27,14 @@ export const DEADLINES = {
 export const TIMEOUTS = {
   llm: 60_000,
   tavily: 20_000,
+  prices: 5_000,
 } as const;
+
+// Tavily pay-as-you-go price; credits per call come from Tavily's `include_usage`.
+export const TAVILY_USD_PER_CREDIT = 0.008;
+
+// Window for the adverse-media news search.
+export const NEWS_TIME_RANGE = "year";
 
 export type Role = keyof ModelNames;
 
@@ -34,8 +43,10 @@ export interface RoleConfig {
   baseURL: string;
 }
 
+export const DEFAULT_NEBIUS_BASE_URL = "https://api.tokenfactory.nebius.com/v1";
+
 export function roleConfigs(env: Env): Record<Role, RoleConfig> {
-  const base = env.NEBIUS_BASE_URL || "https://api.tokenfactory.nebius.com/v1";
+  const base = env.NEBIUS_BASE_URL || DEFAULT_NEBIUS_BASE_URL;
   return {
     research: { model: env.NEBIUS_MODEL_RESEARCH, baseURL: env.NEBIUS_BASE_URL_RESEARCH || base },
     check: { model: env.NEBIUS_MODEL_CHECK || env.NEBIUS_MODEL_RESEARCH, baseURL: env.NEBIUS_BASE_URL_CHECK || base },

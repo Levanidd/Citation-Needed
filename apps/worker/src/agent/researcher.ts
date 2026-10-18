@@ -20,6 +20,7 @@ export async function research(ctx: RunContext): Promise<void> {
       content: fill(researcherPrompt, {
         date: today(),
         maxSearches: LIMITS.searches,
+        maxNews: LIMITS.newsSearches,
         maxReads: LIMITS.reads,
         maxClaims: LIMITS.claims,
         maxTurns: LIMITS.researchTurns,
@@ -74,7 +75,7 @@ export async function research(ctx: RunContext): Promise<void> {
       messages.push({
         role: "user",
         content:
-          "Respond with a tool call (plan_areas, web_search, read_page, record_claim or finish_research). If tool calling is unavailable, reply with only JSON: {\"action\": \"<tool name>\", \"args\": {...}}.",
+          "Respond with a tool call (plan_areas, web_search, news_search, read_page, record_claim or finish_research). If tool calling is unavailable, reply with only JSON: {\"action\": \"<tool name>\", \"args\": {...}}.",
       });
       continue;
     }

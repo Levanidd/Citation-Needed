@@ -10,6 +10,9 @@ export async function runResearch(env: Env, question: string, clientSignal: Abor
   ctx.log({ step: "run_started", question, models: ctx.modelNames });
   await ctx.emit("run_started", { runId: ctx.runId, question, models: ctx.modelNames });
 
+  // Never rejects; runs alongside the first research turn.
+  const prices = ctx.loadPrices();
+
   try {
     await research(ctx);
     if (ctx.claims.length === 0) {
@@ -21,6 +24,7 @@ export async function runResearch(env: Env, question: string, clientSignal: Abor
     }
     await factCheck(ctx);
     const final = await writeReport(ctx);
+    await prices;
     const stats = ctx.stats();
     ctx.log({ step: "done", ...stats });
     await ctx.emit("done", { ...final, stats });

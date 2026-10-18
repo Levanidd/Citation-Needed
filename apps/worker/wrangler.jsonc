@@ -23,10 +23,10 @@
     "NEBIUS_BASE_URL": "https://api.tokenfactory.nebius.com/v1",
     // Model IDs from https://tokenfactory.nebius.com/model-catalog.md
     "NEBIUS_MODEL_RESEARCH": "nvidia/nemotron-3-super-120b-a12b",
-    "NEBIUS_MODEL_CHECK": "nvidia/nemotron-3-super-120b-a12b",
+    // A model from a different lab checks the claims, so its blind spots differ from the researcher's.
+    "NEBIUS_MODEL_CHECK": "reflection/beam",
     "NEBIUS_MODEL_WRITE": "nvidia/nemotron-3-super-120b-a12b",
-    // Optional per-role base URL overrides (models are served from different regions,
-    // e.g. Reflection Beam "reflection/beam" lives in us-north1). Empty = NEBIUS_BASE_URL.
+    // Optional per-role base URL overrides for regional endpoints. Empty = NEBIUS_BASE_URL.
     "NEBIUS_BASE_URL_RESEARCH": "",
     "NEBIUS_BASE_URL_CHECK": "",
     "NEBIUS_BASE_URL_WRITE": "",

@@ -19,16 +19,23 @@ function writerInput(ctx: RunContext): string {
 
   const sections = [...byArea.entries()].map(([area, claims]) => {
     const rows = claims.map((c) => {
-      const domain = ctx.sourceById(c.sourceId)?.domain ?? "unknown";
-      return `- [c:${c.id}] confidence=${LABEL[c.confidence ?? "low"]} verdict=${c.verdict ?? "unverified"} source=${domain}\n  claim: ${c.text}\n  fact-check note: ${c.note ?? "-"}`;
+      const source = ctx.sourceById(c.sourceId);
+      const published = source?.published ? ` published=${source.published}` : "";
+      return `- [c:${c.id}] confidence=${LABEL[c.confidence ?? "low"]} verdict=${c.verdict ?? "unverified"} source=${source?.domain ?? "unknown"}${published}\n  claim: ${c.text}\n  fact-check note: ${c.note ?? "-"}`;
     });
     return `### ${area}\n${rows.length ? rows.join("\n") : "(no claims found)"}`;
   });
 
   const missing = gaps(ctx);
+  const scans = ctx.newsScans.length
+    ? ctx.newsScans.map((s) => `"${s.query}" → ${s.results} news results${s.newest ? `, newest ${s.newest}` : ""}`).join("; ")
+    : "not run";
+  const adverse = ctx.claims.filter((c) => c.adverse).map((c) => `[c:${c.id}]`);
   return [
     `Question: ${ctx.question}`,
     `Risk areas in order: ${ctx.areas.join("; ")}`,
+    `Adverse media scan (news, last 12 months): ${scans}`,
+    `Adverse media claims (negative events flagged by the fact-checker): ${adverse.length ? adverse.join(" ") : "none"}`,
     "",
     "Claims (use only these; cite with the [c:ID] marker shown):",
     sections.join("\n\n"),
@@ -114,10 +121,12 @@ export async function writeReport(ctx: RunContext): Promise<FinalReport> {
   ctx.counters.subrequests++;
   ctx.counters.llmCalls++;
   try {
-    for await (const delta of ctx.models.write.stream(messages, { maxTokens: 4000, temperature: 0.3 }, ctx.signal)) {
+    const onUsage = (usage: Parameters<typeof ctx.addTokens>[1]) => ctx.addTokens("write", usage);
+    for await (const delta of ctx.models.write.stream(messages, { maxTokens: 4000, temperature: 0.3 }, ctx.signal, onUsage)) {
       raw += delta;
       await ctx.emit("report_delta", { text: delta });
     }
+    await ctx.emitUsage();
   } catch (err) {
     if (ctx.clientSignal.aborted) throw err;
     if (err instanceof AgentError && !raw && (err.code === "nebius_auth" || err.code === "nebius_model")) throw err;

@@ -7,6 +7,7 @@ import type {
   Phase,
   ResearchEvent,
   SourcePublic,
+  Usage,
   Verdict,
 } from "@worker/types.ts";
 import { useCallback, useReducer, useRef } from "react";
@@ -20,7 +21,7 @@ export type TraceItem =
       key: string;
       at: number;
       step: number;
-      tool: "search" | "read";
+      tool: "search" | "news" | "read";
       input: string;
       reason: string;
       phase: Phase;
@@ -46,6 +47,7 @@ export interface Run {
   claims: Record<string, ClaimPublic>;
   sources: Record<number, SourcePublic>;
   reportRaw: string;
+  usage?: Usage;
   final?: EventMap["done"];
   error?: ErrorPayload;
 }
@@ -115,8 +117,10 @@ function applyEvent(run: Run, event: ResearchEvent): Run {
     }
     case "report_delta":
       return { ...run, reportRaw: run.reportRaw + event.data.text };
+    case "usage":
+      return { ...run, usage: event.data };
     case "done":
-      return { ...run, status: "done", finishedAt: at, final: event.data };
+      return { ...run, status: "done", finishedAt: at, final: event.data, usage: event.data.stats.usage };
     case "error":
       return { ...run, status: "error", finishedAt: at, error: event.data };
   }
