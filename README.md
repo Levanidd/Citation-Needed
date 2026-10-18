@@ -5,7 +5,11 @@
 - **Live demo:** https://citation-needed.kurdyukov-leo-ger.workers.dev (a run takes about 1–2 minutes; 5 runs per minute per IP)
 - **Demo video:** _TBD_
 
-![Report with claim-level citations and confidence badges next to the live agent trace](docs/screenshot.png)
+![Report with claim-level citations and confidence badges next to the live agent trace; Reflection Beam runs counter-searches as a second opinion while the meter shows tokens and cost](docs/screenshot.png)
+
+Run stats with the cost of the report per model, next to the fact-checker's verdicts:
+
+![Run stats: 188K tokens, $0.065 of LLM calls, $0.265 in total, split by Nemotron (research, writer) and Beam (fact-check)](docs/run-stats.png)
 
 Clicking a citation opens the source scrolled to the highlighted quote:
 

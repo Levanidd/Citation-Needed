@@ -65,7 +65,7 @@ export function RunStats({ stats }: { stats: Stats }) {
               className="flex flex-wrap items-center justify-between gap-x-4 gap-y-0.5 border-b border-line px-3 py-2 text-xs last:border-b-0"
             >
               <span className="flex items-center gap-2">
-                <span className="w-16 font-medium text-muted">{ROLE_LABEL[role]}</span>
+                <span className="w-20 font-medium text-muted">{ROLE_LABEL[role]}</span>
                 <span className="font-medium text-fg">{model.name}</span>
                 {model.lab && <span className="text-subtle">{model.lab}</span>}
               </span>
