@@ -18,13 +18,12 @@ const reasonProp = {
   description: "One short sentence (max ~15 words) explaining why you are doing this. Shown to the user as your decision.",
 };
 
-export const searchToolSchema = (extra: Record<string, unknown> = {}, required: string[] = []) =>
-  fn(
-    "web_search",
-    "Search the live web (Tavily, advanced depth, top 5 results). Returns titles, URLs and snippets.",
-    { query: { type: "string", description: "Specific search query" }, reason: reasonProp, ...extra },
-    ["query", "reason", ...required],
-  );
+const searchTool = fn(
+  "web_search",
+  "Search the live web (Tavily, advanced depth, top 5 results). Returns titles, URLs and snippets.",
+  { query: { type: "string", description: "Specific search query" }, reason: reasonProp },
+  ["query", "reason"],
+);
 
 // ---------------------------------------------------------------------------
 // Researcher tools
@@ -37,7 +36,7 @@ export const researcherTools: ChatCompletionTool[] = [
     { areas: { type: "array", items: { type: "string" }, minItems: 3, maxItems: 5, description: "Risk area names" } },
     ["areas"],
   ),
-  searchToolSchema(),
+  searchTool,
   fn(
     "read_page",
     "Read a web page (Tavily extract). Returns the most relevant ~6k characters of its text. Read a page before quoting it.",
@@ -46,15 +45,27 @@ export const researcherTools: ChatCompletionTool[] = [
   ),
   fn(
     "record_claim",
-    "Record one atomic factual claim backed by a verbatim quote from a page. The quote is verified against the page text by code; the result tells you if it was found.",
+    "Record factual claims, each backed by a verbatim quote from a page. Put every relevant fact from a page into one call. Quotes are verified against the page text by code; the result tells you which were found.",
     {
-      area: { type: "string", description: "One of the planned risk areas" },
-      text: { type: "string", description: "One specific, checkable factual statement in your own words" },
-      url: { type: "string", description: "URL of the page the quote was copied from" },
-      quote: { type: "string", description: "10–40 consecutive words copied verbatim from the page text" },
-      fix_claim_id: { type: "string", description: "Only when re-submitting a claim whose quote was not verified" },
+      claims: {
+        type: "array",
+        minItems: 1,
+        maxItems: 8,
+        description: "One entry per atomic fact",
+        items: {
+          type: "object",
+          properties: {
+            area: { type: "string", description: "One of the planned risk areas" },
+            text: { type: "string", description: "One specific, checkable factual statement in your own words" },
+            url: { type: "string", description: "URL of the page the quote was copied from" },
+            quote: { type: "string", description: "10–40 consecutive words copied verbatim from the page text" },
+            fix_claim_id: { type: "string", description: "Only when re-submitting a claim whose quote was not verified" },
+          },
+          required: ["area", "text", "url", "quote"],
+        },
+      },
     },
-    ["area", "text", "url", "quote"],
+    ["claims"],
   ),
   fn(
     "finish_research",
@@ -79,6 +90,23 @@ const ClaimArgs = z.object({
   quote: z.string().trim().min(10),
   fix_claim_id: z.string().trim().nullish(),
 });
+// Also accepts a single flat claim, a bare array, or `claims` serialized as a JSON string.
+const ClaimsArgs = z.preprocess(
+  (v) => {
+    if (Array.isArray(v)) return { claims: v };
+    if (!v || typeof v !== "object") return v;
+    const o = v as Record<string, unknown>;
+    if (typeof o.claims === "string") {
+      try {
+        return { claims: JSON.parse(o.claims) };
+      } catch {
+        return v;
+      }
+    }
+    return "claims" in o ? o : { claims: [o] };
+  },
+  z.object({ claims: z.array(z.unknown()).min(1) }),
+);
 const FinishArgs = z.object({ reason: z.string().trim().default("") });
 
 export async function runResearcherTool(ctx: RunContext, call: ToolCall): Promise<ToolOutcome> {
@@ -91,7 +119,8 @@ export async function runResearcherTool(ctx: RunContext, call: ToolCall): Promis
       case "read_page":
         return await readPage(ctx, call.arguments);
       case "record_claim":
-        return await recordClaim(ctx, call.arguments);
+      case "record_claims":
+        return await recordClaims(ctx, call.arguments);
       case "finish_research":
         return { content: "Research finished.", finish: true };
       default:
@@ -233,13 +262,27 @@ async function verificationCorpus(ctx: RunContext, source: Source) {
   return source.snippet ? preparePage(source.snippet) : undefined;
 }
 
-async function recordClaim(ctx: RunContext, raw: string): Promise<ToolOutcome> {
-  const args = parseArgs(ClaimArgs, raw);
+async function recordClaims(ctx: RunContext, raw: string): Promise<ToolOutcome> {
+  const args = parseArgs(ClaimsArgs, raw);
   if (!args.ok) return { content: `Invalid arguments: ${args.error}` };
-  const { area, text, url, quote, fix_claim_id } = args.data;
+  const results: Record<string, unknown>[] = [];
+  for (const item of args.data.claims) {
+    const parsed = ClaimArgs.safeParse(item);
+    if (!parsed.success) {
+      results.push({ error: parsed.error.issues.map((i) => `${i.path.join(".") || "claim"}: ${i.message}`).join("; ") });
+      continue;
+    }
+    results.push(await recordClaim(ctx, parsed.data));
+  }
+  const coverage = Object.fromEntries(ctx.areas.map((a) => [a, ctx.claims.filter((c) => c.area === a).length]));
+  return { content: JSON.stringify({ results, coverage, claims_left: LIMITS.claims - ctx.claims.length }) };
+}
+
+async function recordClaim(ctx: RunContext, args: z.infer<typeof ClaimArgs>): Promise<Record<string, unknown>> {
+  const { area, text, url, quote, fix_claim_id } = args;
   const existing = fix_claim_id ? ctx.claims.find((c) => c.id === fix_claim_id) : undefined;
   if (!existing && ctx.claims.length >= LIMITS.claims) {
-    return { content: "Claim budget reached. Call finish_research now.", finish: false };
+    return { error: "Claim budget reached. Call finish_research now." };
   }
 
   const { source } = ctx.source(url);
@@ -261,17 +304,11 @@ async function recordClaim(ctx: RunContext, raw: string): Promise<ToolOutcome> {
   await ctx.emit("claim", { claim, source: publicSource(source), fixed: Boolean(existing) });
   ctx.log({ step: "claim", id: claim.id, verified: match.verified, method: match.method, domain: source.domain });
 
-  const coverage = Object.fromEntries(ctx.areas.map((a) => [a, ctx.claims.filter((c) => c.area === a).length]));
-  const result: Record<string, unknown> = {
-    claim_id: claim.id,
-    verified: match.verified,
-    coverage,
-    claims_left: LIMITS.claims - ctx.claims.length,
-  };
+  const result: Record<string, unknown> = { claim_id: claim.id, verified: match.verified };
   if (!match.verified) {
     result.hint = corpus
-      ? `Quote not found verbatim on ${source.url}. Copy 10–40 consecutive words exactly as written on the page and call record_claim again with fix_claim_id="${claim.id}".`
-      : `Could not fetch ${source.url} to verify the quote. Use a URL you have read with read_page and call record_claim again with fix_claim_id="${claim.id}".`;
+      ? `Quote not found verbatim on ${source.url}. Copy 10–40 consecutive words exactly as written on the page and re-submit with fix_claim_id="${claim.id}".`
+      : `Could not fetch ${source.url} to verify the quote. Use a URL you have read with read_page and re-submit with fix_claim_id="${claim.id}".`;
   }
-  return { content: JSON.stringify(result) };
+  return result;
 }

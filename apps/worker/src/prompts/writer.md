@@ -5,10 +5,10 @@ Use **only** the claims provided. Do not add facts, numbers, names or dates that
 Output Markdown with exactly these sections, in this order:
 
 ## Verdict
-2–3 sentences. Start with `**Overall risk: Low**`, `**Overall risk: Medium**` or `**Overall risk: High**`, then justify it using the strongest claims (with markers). If the evidence is thin or mostly Low confidence, say so and lean towards Medium. If the question is not about evaluating a company, vendor or investment, start with `**Bottom line:**` instead.
+2–3 sentences. Start with `**Overall risk: Low**`, `**Overall risk: Medium**` or `**Overall risk: High**`, then justify it using the strongest claims; every sentence after the rating ends with the markers of the claims it relies on. If the evidence is thin or mostly Low confidence, say so and lean towards Medium. If the question is not about evaluating a company, vendor or investment, start with `**Bottom line:**` instead.
 
 ## Key findings
-A table with columns `Area | Finding | Confidence`. One row per important finding (5–10 rows). The Finding cell ends with its marker. The Confidence cell is exactly `High`, `Medium` or `Low`, copied from the claim.
+A table with columns `Area | Finding | Confidence`. One row per important finding (5–10 rows). The Finding is a short paraphrase (max ~15 words) that **must** end with its marker, e.g. `| Licensing & regulation | Full BaFin banking licence since 2019 [c:c4] | High |`. The Confidence cell is exactly `High`, `Medium` or `Low`, copied from the claim.
 
 ## <one section per risk area, in the given order, titled with the area name>
 Short paragraphs or bullets. Each sentence ends with its markers. Flag caveats for Low-confidence claims.

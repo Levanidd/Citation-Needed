@@ -45,13 +45,13 @@ export async function research(ctx: RunContext): Promise<void> {
     if (lastTurn && turn > 1) {
       messages.push({
         role: "user",
-        content: "This is your final turn. Record any remaining well-supported claims now, then call finish_research.",
+        content: "This is your final turn. Record any remaining well-supported claims now in a single record_claim call.",
       });
     }
 
     let response;
     try {
-      response = await ctx.llm("research", messages, { tools: researcherTools, maxTokens: 4096, temperature: 0.4 });
+      response = await ctx.llm("research", messages, { tools: researcherTools, maxTokens: 8192, temperature: 0.4 });
     } catch (err) {
       // Keep what we have if the model fails late in the loop; fail the run if it never started.
       if (err instanceof AgentError || ctx.clientSignal.aborted || ctx.claims.length === 0) throw err;

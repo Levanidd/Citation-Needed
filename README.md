@@ -2,12 +2,14 @@
 
 **Due diligence you can click through.** Name a company, vendor or startup; an AI agent researches the live web and returns a due diligence report where **every claim has a source, a verbatim quote and a confidence rating**. Click any `[n]` and the source opens scrolled to the highlighted quote. An adversarial fact-checker tries to break each claim before the report is written, and you watch every decision the agent makes, live.
 
-- **Live demo:** _TBD — deployed Worker URL_
+- **Live demo:** https://citation-needed.kurdyukov-leo-ger.workers.dev (a run takes about 1–2 minutes; 5 runs per minute per IP)
 - **Demo video:** _TBD_
 
 ![Report with claim-level citations and confidence badges next to the live agent trace](docs/screenshot.png)
 
-<sub>Screenshot from a local run against a mock Token Factory + Tavily upstream (fictional "Acme Bank" data).</sub>
+Clicking a citation opens the source scrolled to the highlighted quote:
+
+![Wikipedia opened via a citation link, with the supporting quote highlighted](docs/citation-highlight.png)
 
 Built for the Nebius Token Factory hackathon on top of the [Token Factory deep agent cookbook](cookbook/deep-agent-example-1/) (Nemotron + Tavily), ported to TypeScript on Cloudflare Workers.
 
@@ -39,11 +41,11 @@ flowchart LR
   R & F & WR <--> N[(Nebius Token Factory<br/>OpenAI-compatible)]
 ```
 
-1. **Researcher (model-driven loop, ≤ 14 turns).** The model calls `plan_areas`, `web_search`, `read_page`, `record_claim` and `finish_research`. It decides what to search, which pages to read, which facts to record and when to stop; code only enforces budgets (8 searches, 6 page reads, 20 claims). Every search/read carries a `reason` that the UI shows as the decision log.
-2. **Quote verifier.** `record_claim` immediately checks the quote against the page text (Markdown stripped, quotes/dashes/whitespace normalized). The tool result tells the model `verified: true/false`, so it can fix bad quotes with `fix_claim_id`.
-3. **Fact-checker.** Sees all claims, runs up to 6 counter-searches (one per claim, in parallel) and submits a verdict, a note and optional corroborating or counter-evidence URLs per claim.
+1. **Researcher (model-driven loop, ≤ 18 turns).** The model calls `plan_areas`, `web_search`, `read_page`, `record_claim` and `finish_research`. It decides what to search, which pages to read, which facts to record and when to stop; code only enforces budgets (8 searches, 6 page reads, 20 claims). Every search/read carries a `reason` that the UI shows as the decision log. Nemotron on Token Factory emits one tool call per turn, so `record_claim` takes a batch (`claims: [...]`) and records every fact from a page in a single turn.
+2. **Quote verifier.** `record_claim` immediately checks each quote against the page text (Markdown stripped, quotes/dashes/whitespace normalized). The tool result tells the model `verified: true/false` per claim, so it can fix bad quotes with `fix_claim_id`.
+3. **Fact-checker.** Sees all claims, sends up to 6 counter-searches in one batched `web_search` call (run in parallel), then submits a verdict, a note and corroborating or counter-evidence URLs for every claim. Missing verdicts are requested once more.
 4. **Confidence.** Computed in code from quote verification, verdict, independent domains and primary-source detection (regulators and registers by domain, company filings flagged by the checker).
-5. **Writer.** Writes the report only from the claims, citing `[c:ID]` markers; the server renumbers sources by first citation and turns markers into links. If the writer fails, a code-built report is returned instead, so a run always ends with a result or a readable error.
+5. **Writer.** Writes the report only from the claims, citing `[c:ID]` markers; the server renumbers sources by first citation and turns markers into links. The writer runs with Nemotron's thinking disabled, so the report starts streaming in under a second. If the writer fails, a code-built report is returned instead, so a run always ends with a result or a readable error.
 
 If a model writes tool calls as text instead of native tool calls, the loop falls back to parsing a JSON action (`{"action": ..., "args": ...}` or `<tool_call>` blocks).
 
@@ -72,13 +74,16 @@ Other scripts: `pnpm typecheck`, `pnpm test` (verifier, confidence rule, citatio
 
 ## Deploy
 
+First deploy (the Worker does not exist yet, so the two required secrets are uploaded from `apps/worker/.dev.vars`):
+
 ```bash
+pnpm build                                            # builds the SPA into apps/web/dist
 cd apps/worker
 pnpm exec wrangler login
-pnpm exec wrangler secret put NEBIUS_API_KEY
-pnpm exec wrangler secret put TAVILY_API_KEY
-cd ../.. && pnpm run deploy      # `pnpm deploy` is a built-in pnpm command, so use `run`
+pnpm exec wrangler deploy --secrets-file .dev.vars
 ```
+
+Later deploys keep the secrets: `pnpm run deploy` from the repo root (`pnpm deploy` is a built-in pnpm command, so use `run`). Rotate a key with `pnpm exec wrangler secret put NEBIUS_API_KEY` in `apps/worker`.
 
 CI (`.github/workflows/deploy.yml`) typechecks, tests and builds on every push to `main`, then deploys when the repository secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` are set.
 
@@ -89,7 +94,7 @@ CI (`.github/workflows/deploy.yml`) typechecks, tests and builds on every push t
 | `NEBIUS_BASE_URL` | `https://api.tokenfactory.nebius.com/v1` | Token Factory endpoint |
 | `NEBIUS_MODEL_RESEARCH` / `_CHECK` / `_WRITE` | `nvidia/nemotron-3-super-120b-a12b` | Model per role |
 | `NEBIUS_BASE_URL_RESEARCH` / `_CHECK` / `_WRITE` | empty (use `NEBIUS_BASE_URL`) | Per-role endpoint, for models served from other regions (e.g. `https://api.tokenfactory.us-central1.nebius.com/v1`) |
-| `NEBIUS_EXTRA_BODY` | empty | JSON merged into every completion request, e.g. `{"chat_template_kwargs":{"enable_thinking":false}}` for lower latency |
+| `NEBIUS_EXTRA_BODY` | empty | JSON merged into every completion request (overrides the writer's default `{"chat_template_kwargs":{"enable_thinking":false}}`), e.g. the same value to disable thinking for all roles |
 | `TAVILY_BASE_URL` | `https://api.tavily.com` | Tavily endpoint |
 
 ## Limits and next steps

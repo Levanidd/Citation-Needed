@@ -5,6 +5,9 @@
   // Latest date supported by the pinned workerd runtime; bump together with wrangler.
   "compatibility_date": "2026-10-12",
   "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  // Every uploaded version would otherwise get its own public URL that can spend the API keys.
+  "preview_urls": false,
 
   // The React SPA (apps/web) is served by the same Worker; only /api/* reaches the Worker code.
   "assets": {

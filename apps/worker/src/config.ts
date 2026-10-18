@@ -1,7 +1,7 @@
 import type { ModelNames } from "./types.ts";
 
 export const LIMITS = {
-  researchTurns: 14,
+  researchTurns: 18,
   searches: 8,
   reads: 6,
   claims: 20,
@@ -48,7 +48,18 @@ export function modelNames(env: Env): ModelNames {
   return { research: r.research.model, check: r.check.model, write: r.write.model };
 }
 
-export function extraBody(env: Env): Record<string, unknown> {
+// Nemotron otherwise reasons for thousands of tokens before the first visible word, which can
+// exhaust the writer's max_tokens; the writer only rephrases already verified claims.
+// NEBIUS_EXTRA_BODY overrides these per-role defaults.
+const ROLE_EXTRA_BODY: Partial<Record<Role, Record<string, unknown>>> = {
+  write: { chat_template_kwargs: { enable_thinking: false } },
+};
+
+export function roleExtraBody(env: Env, role: Role): Record<string, unknown> {
+  return { ...ROLE_EXTRA_BODY[role], ...extraBody(env) };
+}
+
+function extraBody(env: Env): Record<string, unknown> {
   if (!env.NEBIUS_EXTRA_BODY) return {};
   try {
     const parsed: unknown = JSON.parse(env.NEBIUS_EXTRA_BODY);

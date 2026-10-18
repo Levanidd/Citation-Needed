@@ -5,6 +5,8 @@
 import type { Claim } from "./types.ts";
 
 const MARKER_RE = /\[c:([^\]\n]{1,80})\]/g;
+// A run of adjacent markers, e.g. "[c:c6][c:c7] [c:c8]" or "[c:c6], [c:c7]".
+const MARKER_RUN_RE = /\[c:[^\]\n]{1,80}\](?:[ \t]*[,;]?[ \t]*\[c:[^\]\n]{1,80}\])*/g;
 
 function markerIds(inner: string): string[] {
   return inner
@@ -29,21 +31,26 @@ export function orderCitedSources(text: string, claims: Map<string, Pick<Claim, 
   return order;
 }
 
-/** Replace claim markers with citation links; unknown IDs are dropped. */
+/**
+ * Replace claim markers with citation links; unknown IDs are dropped. Adjacent markers that
+ * resolve to the same source collapse into one link (to the first claim) instead of "[1][1][1]".
+ */
 export function renderCitations(
   text: string,
   claims: Map<string, Pick<Claim, "sourceId">>,
   numberOf: (sourceId: number) => number | undefined,
 ): string {
-  return text.replace(MARKER_RE, (_, inner: string) =>
-    markerIds(inner)
-      .map((id) => {
+  return text.replace(MARKER_RUN_RE, (run) => {
+    const links = new Map<number, string>();
+    for (const m of run.matchAll(MARKER_RE)) {
+      for (const id of markerIds(m[1])) {
         const claim = claims.get(id);
         const n = claim ? numberOf(claim.sourceId) : undefined;
-        return n === undefined ? "" : `[${n}](#claim-${id})`;
-      })
-      .join(""),
-  );
+        if (n !== undefined && !links.has(n)) links.set(n, `[${n}](#claim-${id})`);
+      }
+    }
+    return [...links.values()].join("");
+  });
 }
 
 /** Hide a marker that is still being streamed, e.g. a trailing "[c:c1". */

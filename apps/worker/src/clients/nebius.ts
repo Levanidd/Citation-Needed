@@ -7,7 +7,7 @@ import type {
   ChatCompletionTool,
   ChatCompletionToolChoiceOption,
 } from "openai/resources/chat/completions";
-import { type Role, TIMEOUTS, extraBody, roleConfigs } from "../config.ts";
+import { type Role, TIMEOUTS, roleConfigs, roleExtraBody } from "../config.ts";
 import { AgentError } from "../errors.ts";
 import { withTimeout } from "../util.ts";
 
@@ -135,7 +135,6 @@ export class Llm {
 
 export function createModels(env: Env): Record<Role, Llm> {
   const cfg = roleConfigs(env);
-  const extra = extraBody(env);
-  const make = (role: Role) => new Llm(role, cfg[role].model, cfg[role].baseURL, env.NEBIUS_API_KEY, extra);
+  const make = (role: Role) => new Llm(role, cfg[role].model, cfg[role].baseURL, env.NEBIUS_API_KEY, roleExtraBody(env, role));
   return { research: make("research"), check: make("check"), write: make("write") };
 }

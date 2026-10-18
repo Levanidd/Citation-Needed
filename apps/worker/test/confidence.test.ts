@@ -28,13 +28,16 @@ test("citation markers are numbered by first appearance and unknown ids dropped"
     ["c2", { sourceId: 3 }],
     ["c3", { sourceId: 7 }],
   ]);
-  const text = "A [c:c2]. B [c:c1][c:c3]. C [c:c1, c:c2]. D [c:c99].";
+  const text = "A [c:c2]. B [c:c1][c:c3]. C [c:c1, c:c2]. D [c:c99]. E ([c:c3], [c:c2]; [c:c1]).";
   const order = orderCitedSources(text, claims);
   assert.deepEqual(order, [3, 7]);
   const n = new Map(order.map((id, i) => [id, i + 1]));
   const out = renderCitations(text, claims, (id) => n.get(id));
-  assert.equal(out, "A [1](#claim-c2). B [2](#claim-c1)[2](#claim-c3). C [2](#claim-c1)[1](#claim-c2). D .");
-  assert.equal(plainCitations(out), "A [1]. B [2][2]. C [2][1]. D .");
+  assert.equal(
+    out,
+    "A [1](#claim-c2). B [2](#claim-c1). C [2](#claim-c1)[1](#claim-c2). D . E ([2](#claim-c3)[1](#claim-c2)).",
+  );
+  assert.equal(plainCitations(out), "A [1]. B [2]. C [2][1]. D . E ([2][1]).");
 });
 
 test("partial markers at the end of a stream are hidden", () => {

@@ -7,8 +7,7 @@ import type { ClaimPublic, Verdict } from "../types.ts";
 import { fill, today, truncate } from "../util.ts";
 import { computeConfidence, isPrimaryDomain } from "./confidence.ts";
 import { type RunContext, publicSource } from "./context.ts";
-import { type ToolCall, extractToolCalls, parseArgs } from "./toolcalls.ts";
-import { searchToolSchema } from "./tools.ts";
+import { extractToolCalls, parseArgs } from "./toolcalls.ts";
 
 const submitTool: ChatCompletionTool = {
   type: "function",
@@ -27,7 +26,10 @@ const submitTool: ChatCompletionTool = {
               verdict: { type: "string", enum: ["supported", "contested", "unverified"] },
               note: { type: "string", description: "≤ 20 words: why" },
               source_type: { type: "string", enum: ["primary", "secondary"] },
-              corroborating_url: { type: "string", description: "Optional: URL on a different domain that confirms the claim" },
+              corroborating_url: {
+                type: "string",
+                description: "URL from your counter-search results, on a different domain, that confirms the claim. Provide whenever one exists.",
+              },
               counter_evidence_url: { type: "string", description: "Optional: URL that contradicts the claim" },
             },
             required: ["claim_id", "verdict", "note", "source_type"],
@@ -39,20 +41,74 @@ const submitTool: ChatCompletionTool = {
   },
 };
 
-const checkerTools: ChatCompletionTool[] = [
-  searchToolSchema({ claim_id: { type: "string", description: "The claim this counter-search tries to break" } }, ["claim_id"]),
-  submitTool,
-];
+const counterSearchTool: ChatCompletionTool = {
+  type: "function",
+  function: {
+    name: "web_search",
+    description:
+      "Run counter-searches on the live web (Tavily, top 5 results each), one per claim you want to break. Put all of them into this single call; they run in parallel.",
+    parameters: {
+      type: "object",
+      properties: {
+        searches: {
+          type: "array",
+          minItems: 1,
+          maxItems: LIMITS.counterSearches,
+          items: {
+            type: "object",
+            properties: {
+              claim_id: { type: "string", description: "The claim this counter-search tries to break" },
+              query: { type: "string", description: "Specific search query" },
+              reason: { type: "string", description: "One short sentence (max ~15 words). Shown to the user as your decision." },
+            },
+            required: ["claim_id", "query", "reason"],
+          },
+        },
+      },
+      required: ["searches"],
+    },
+  },
+};
 
-const CounterSearchArgs = z.object({
+const checkerTools: ChatCompletionTool[] = [counterSearchTool, submitTool];
+
+const CounterSearchItem = z.object({
   query: z.string().trim().min(2).max(400),
   reason: z.string().trim().default(""),
   claim_id: z.string().trim().default(""),
 });
+// Also accepts a single flat search or a bare array.
+const CounterSearchArgs = z.preprocess(
+  (v) => (Array.isArray(v) ? { searches: v } : v && typeof v === "object" && !("searches" in v) ? { searches: [v] } : v),
+  z.object({ searches: z.array(z.unknown()).min(1) }),
+);
+
+const VERDICT_SYNONYMS: Record<string, Verdict> = {
+  confirmed: "supported",
+  verified: "supported",
+  true: "supported",
+  disputed: "contested",
+  refuted: "contested",
+  contradicted: "contested",
+  false: "contested",
+  unverifiable: "unverified",
+  unclear: "unverified",
+  insufficient: "unverified",
+};
+
+/** "c3", "C3", "c:c3" and "3" all mean claim c3. */
+function normalizeClaimId(raw: string): string {
+  const id = raw.trim().toLowerCase().replace(/^c:/, "");
+  return /^\d+$/.test(id) ? `c${id}` : id;
+}
 
 const VerdictItem = z.object({
-  claim_id: z.string().trim(),
-  verdict: z.preprocess((v) => (typeof v === "string" ? v.toLowerCase().trim() : v), z.enum(["supported", "contested", "unverified"])),
+  claim_id: z.union([z.string(), z.number()]).transform((v) => normalizeClaimId(String(v))),
+  verdict: z.preprocess((v) => {
+    if (typeof v !== "string") return v;
+    const key = v.toLowerCase().trim();
+    return VERDICT_SYNONYMS[key] ?? key;
+  }, z.enum(["supported", "contested", "unverified"])),
   note: z.string().trim().default(""),
   source_type: z.preprocess((v) => (typeof v === "string" ? v.toLowerCase().trim() : v), z.enum(["primary", "secondary"])).catch("secondary"),
   corroborating_url: z.string().trim().nullish(),
@@ -77,27 +133,47 @@ function describeClaims(ctx: RunContext): string {
   return `Question under research: ${ctx.question}\n\nClaims to check (${ctx.claims.length}):\n${lines.join("\n")}`;
 }
 
-async function counterSearch(ctx: RunContext, call: ToolCall, searched: Set<string>): Promise<string> {
-  const args = parseArgs(CounterSearchArgs, call.arguments);
+async function counterSearches(ctx: RunContext, raw: string, searched: Set<string>): Promise<string> {
+  const args = parseArgs(CounterSearchArgs, raw);
   if (!args.ok) return `Invalid arguments: ${args.error}`;
-  const claimId = args.data.claim_id;
-  if (claimId && searched.has(claimId)) return `Already counter-searched claim ${claimId}; one search per claim.`;
-  if (ctx.counters.counterSearches >= LIMITS.counterSearches || !ctx.canSubrequest(3)) {
-    return "Counter-search budget exhausted. Submit verdicts now.";
+  const results: string[] = [];
+  const items: z.infer<typeof CounterSearchItem>[] = [];
+  for (const entry of args.data.searches) {
+    const item = CounterSearchItem.safeParse(entry);
+    if (!item.success) {
+      results.push(`Invalid search: ${item.error.issues.map((i) => `${i.path.join(".") || "search"}: ${i.message}`).join("; ")}`);
+      continue;
+    }
+    const claimId = item.data.claim_id ? normalizeClaimId(item.data.claim_id) : "";
+    if (claimId && searched.has(claimId)) {
+      results.push(`Already counter-searched claim ${claimId}; one search per claim.`);
+      continue;
+    }
+    if (claimId) searched.add(claimId);
+    items.push({ ...item.data, claim_id: claimId });
   }
-  if (claimId) searched.add(claimId);
+  // Searches run in parallel, so cut to the remaining budget before starting any of them.
+  let allowed = Math.max(0, LIMITS.counterSearches - ctx.counters.counterSearches);
+  while (allowed > 0 && !ctx.canSubrequest(allowed + 2)) allowed--;
+  if (items.length > allowed) results.push(`Counter-search budget exhausted; skipped ${items.length - allowed} search(es).`);
+  results.push(...(await Promise.all(items.slice(0, allowed).map((item) => counterSearch(ctx, item)))));
+  return `${results.join("\n\n")}\n\nNow call submit_verdicts with a verdict for every claim.`;
+}
+
+async function counterSearch(ctx: RunContext, args: z.infer<typeof CounterSearchItem>): Promise<string> {
+  const claimId = args.claim_id;
   const step = ctx.nextStep();
   await ctx.emit("decision", {
     step,
     tool: "search",
-    input: args.data.query,
-    reason: args.data.reason,
+    input: args.query,
+    reason: args.reason,
     phase: "factcheck",
     claimId: claimId || undefined,
   });
   const t = Date.now();
   try {
-    const hits = await ctx.search(args.data.query, "counter");
+    const hits = await ctx.search(args.query, "counter");
     const newSources = [];
     const lines: string[] = [];
     for (const hit of hits) {
@@ -112,7 +188,9 @@ async function counterSearch(ctx: RunContext, call: ToolCall, searched: Set<stri
       ms: Date.now() - t,
       ok: true,
     });
-    return hits.length ? `Counter-search results for "${args.data.query}":\n${lines.join("\n")}` : "No results.";
+    return hits.length
+      ? `Counter-search results for ${claimId || "claim"} ("${args.query}"):\n${lines.join("\n")}`
+      : `No results for ${claimId || "claim"} ("${args.query}").`;
   } catch (err) {
     if (err instanceof AgentError || ctx.signal.aborted) throw err;
     const message = err instanceof Error ? err.message : String(err);
@@ -128,7 +206,7 @@ function collectVerdicts(raw: string, into: Map<string, VerdictInput>): string {
   for (const item of args.data.verdicts) {
     const v = VerdictItem.safeParse(item);
     if (v.success) {
-      into.set(v.data.claim_id.replace(/^c:/, ""), v.data);
+      into.set(v.data.claim_id, v.data);
       accepted++;
     }
   }
@@ -149,14 +227,16 @@ export async function factCheck(ctx: RunContext): Promise<void> {
     { role: "user", content: describeClaims(ctx) },
   ];
   const searched = new Set<string>();
+  const missing = () => ctx.claims.filter((c) => !verdicts.has(c.id)).map((c) => c.id);
 
   try {
-    for (let turn = 1; turn <= LIMITS.checkerTurns && verdicts.size === 0; turn++) {
-      const force = turn === LIMITS.checkerTurns || ctx.elapsed() > DEADLINES.factcheck - 15_000 || !ctx.canSubrequest(3);
+    for (let turn = 1; turn <= LIMITS.checkerTurns && missing().length > 0; turn++) {
+      // Turn 1 is for counter-searches; later turns only collect (missing) verdicts.
+      const force = turn > 1 || ctx.elapsed() > DEADLINES.factcheck - 15_000 || !ctx.canSubrequest(3);
       const response = await ctx.llm("check", messages, {
         tools: force ? [submitTool] : checkerTools,
         toolChoice: force ? { type: "function", function: { name: "submit_verdicts" } } : "auto",
-        maxTokens: 6000,
+        maxTokens: 10_000,
         temperature: 0.2,
       });
       const message = response.choices[0]?.message;
@@ -164,16 +244,31 @@ export async function factCheck(ctx: RunContext): Promise<void> {
       const { calls, native } = extractToolCalls(message);
       if (calls.length === 0) {
         messages.push({ role: "assistant", content: message.content ?? "" });
-        messages.push({ role: "user", content: "Run your counter-searches with web_search, then call submit_verdicts." });
+        messages.push({
+          role: "user",
+          content: force
+            ? "Call submit_verdicts with a verdict for every claim."
+            : "Run your counter-searches in one web_search call, then call submit_verdicts.",
+        });
         continue;
       }
 
-      const searches = calls.filter((c) => c.name === "web_search");
-      const results = await Promise.all(searches.map((c) => counterSearch(ctx, c, searched)));
-      const outputs = new Map<string, string>(searches.map((c, i) => [c.id, results[i]]));
+      const outputs = new Map<string, string>();
       for (const call of calls) {
-        if (call.name === "submit_verdicts") outputs.set(call.id, collectVerdicts(call.arguments, verdicts));
-        else if (!outputs.has(call.id)) outputs.set(call.id, `Unknown tool "${call.name}".`);
+        if (call.name === "web_search") {
+          outputs.set(call.id, await counterSearches(ctx, call.arguments, searched));
+        } else if (call.name === "submit_verdicts") {
+          const accepted = collectVerdicts(call.arguments, verdicts);
+          const left = missing();
+          outputs.set(
+            call.id,
+            left.length
+              ? `${accepted} Still missing verdicts for: ${left.join(", ")}. Call submit_verdicts again with verdicts for exactly these claims.`
+              : accepted,
+          );
+        } else {
+          outputs.set(call.id, `Unknown tool "${call.name}".`);
+        }
       }
 
       if (native) {
