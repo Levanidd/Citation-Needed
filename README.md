@@ -2,7 +2,7 @@
 
 **Due diligence you can click through.** Name a company, vendor or startup; an AI agent researches the live web and returns a due diligence report where **every claim has a source, a verbatim quote and a confidence rating**. Click any `[n]` and the source opens scrolled to the highlighted quote. An adversarial fact-checker **from a different AI lab** (Reflection Beam checks what NVIDIA Nemotron found) tries to break each claim, an **adverse media scan** searches the last 12 months of news for fines, lawsuits and breaches, and a live meter shows what the report cost in tokens and dollars. You watch every decision the agent makes, live.
 
-- **Live demo:** https://citation-needed.kurdyukov-leo-ger.workers.dev (a run takes about 1–2 minutes; 5 runs per minute per IP)
+- **Live demo:** https://citation-needed.kurdyukov-leo-ger.workers.dev (a run takes about 1–2 minutes; 5 runs per minute per IP, 50 runs per day overall)
 - **Demo video:** [citation-needed.mp4 on Google Drive](https://drive.google.com/file/d/1Kc1YXTawlV-4jAFhuXmenH8A1Pw9ES8q/view?usp=sharing)
 
 ![Report with claim-level citations and confidence badges next to the live agent trace; Reflection Beam runs counter-searches as a second opinion while the meter shows tokens and cost](docs/screenshot.png)
@@ -65,7 +65,7 @@ If a model writes tool calls as text instead of native tool calls, the loop fall
   - Fact-checker: **`reflection/beam`** (Reflection Beam 1.0), a model from a different lab, so the checker does not share the researcher's blind spots.
   - Roles are configurable separately (`NEBIUS_MODEL_RESEARCH` / `CHECK` / `WRITE`), for example `nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B` as a cheap writer.
 - **Tavily** `/search` (advanced, top 5; `topic: "news"` for the adverse media scan) and `/extract` for page text.
-- **Cloudflare Workers + Hono** for the API and SSE; the same Worker serves the SPA via static assets. A native rate-limit binding allows 5 runs per minute per IP.
+- **Cloudflare Workers + Hono** for the API and SSE; the same Worker serves the SPA via static assets. A native rate-limit binding allows 5 runs per minute per IP, and a Durable Object caps the whole app at `DAILY_RUN_LIMIT` runs per UTC day (50 by default, `0` disables it), so a script calling the API directly cannot run up the Token Factory and Tavily bills.
 - **React + Vite + Tailwind**; `react-markdown` + `remark-gfm` render the report, citations and badges. **pdfmake** builds the PDF in the browser from the same Markdown (text PDF with clickable links, Cyrillic-capable Roboto); it is code-split and loads only when you export.
 
 ## Run locally

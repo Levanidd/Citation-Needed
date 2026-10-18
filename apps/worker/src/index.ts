@@ -43,6 +43,18 @@ app.post("/api/research", async (c) => {
     );
   }
 
+  const dailyLimit = Number(c.env.DAILY_RUN_LIMIT) || 0;
+  if (dailyLimit > 0 && !(await c.env.DAILY_QUOTA.getByName("global").take(dailyLimit))) {
+    return c.json(
+      errorJson({
+        code: "daily_limit",
+        message: `This demo allows ${dailyLimit} research runs per day and today's are used up. Try again after 00:00 UTC.`,
+        retryable: false,
+      }),
+      429,
+    );
+  }
+
   return streamSSE(
     c,
     async (stream) => {
@@ -60,4 +72,5 @@ app.post("/api/research", async (c) => {
 
 app.all("/api/*", (c) => c.json(errorJson({ code: "not_found", message: "Unknown API route.", retryable: false }), 404));
 
+export { DailyQuota } from "./quota.ts";
 export default app satisfies ExportedHandler<Env>;
