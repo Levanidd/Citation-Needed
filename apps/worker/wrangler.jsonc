@@ -1,0 +1,53 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "citation-needed",
+  "main": "src/index.ts",
+  // Latest date supported by the pinned workerd runtime; bump together with wrangler.
+  "compatibility_date": "2026-10-12",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // The React SPA (apps/web) is served by the same Worker; only /api/* reaches the Worker code.
+  "assets": {
+    "directory": "../web/dist",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+
+  // Prompts live in src/prompts/*.md and are bundled as text modules.
+  "rules": [{ "type": "Text", "globs": ["**/*.md"], "fallthrough": true }],
+
+  "vars": {
+    "NEBIUS_BASE_URL": "https://api.tokenfactory.nebius.com/v1",
+    // Model IDs from https://tokenfactory.nebius.com/model-catalog.md
+    "NEBIUS_MODEL_RESEARCH": "nvidia/nemotron-3-super-120b-a12b",
+    "NEBIUS_MODEL_CHECK": "nvidia/nemotron-3-super-120b-a12b",
+    "NEBIUS_MODEL_WRITE": "nvidia/nemotron-3-super-120b-a12b",
+    // Optional per-role base URL overrides (models are served from different regions,
+    // e.g. Reflection Beam "reflection/beam" lives in us-north1). Empty = NEBIUS_BASE_URL.
+    "NEBIUS_BASE_URL_RESEARCH": "",
+    "NEBIUS_BASE_URL_CHECK": "",
+    "NEBIUS_BASE_URL_WRITE": "",
+    // Optional JSON merged into every chat completion request body,
+    // e.g. {"chat_template_kwargs":{"enable_thinking":false}} to trade reasoning for latency.
+    "NEBIUS_EXTRA_BODY": "",
+    "TAVILY_BASE_URL": "https://api.tavily.com"
+  },
+
+  "secrets": {
+    "required": ["NEBIUS_API_KEY", "TAVILY_API_KEY"]
+  },
+
+  // 5 research runs per minute per client IP.
+  "ratelimits": [
+    {
+      "name": "RATE_LIMITER",
+      "namespace_id": "1001",
+      "simple": { "limit": 5, "period": 60 }
+    }
+  ],
+
+  "observability": {
+    "enabled": true,
+    "traces": { "enabled": true }
+  }
+}

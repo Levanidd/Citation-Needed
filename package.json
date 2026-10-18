@@ -1,0 +1,18 @@
+{
+  "name": "citation-needed",
+  "private": true,
+  "description": "Due diligence research agent: every claim has a source, a verbatim quote and a confidence rating.",
+  "license": "MIT",
+  "packageManager": "pnpm@12.14.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "pnpm --filter web build && pnpm --filter worker dev",
+    "dev:web": "pnpm --filter web dev",
+    "build": "pnpm --filter web build",
+    "deploy": "pnpm build && pnpm --filter worker run deploy",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm --filter worker test"
+  }
+}
