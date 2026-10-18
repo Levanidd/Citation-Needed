@@ -3,7 +3,7 @@
 **Due diligence you can click through.** Name a company, vendor or startup; an AI agent researches the live web and returns a due diligence report where **every claim has a source, a verbatim quote and a confidence rating**. Click any `[n]` and the source opens scrolled to the highlighted quote. An adversarial fact-checker **from a different AI lab** (Reflection Beam checks what NVIDIA Nemotron found) tries to break each claim, an **adverse media scan** searches the last 12 months of news for fines, lawsuits and breaches, and a live meter shows what the report cost in tokens and dollars. You watch every decision the agent makes, live.
 
 - **Live demo:** https://citation-needed.kurdyukov-leo-ger.workers.dev (a run takes about 1–2 minutes; 5 runs per minute per IP)
-- **Demo video:** _TBD_
+- **Demo video:** [citation-needed.mp4 on Google Drive](https://drive.google.com/file/d/1Kc1YXTawlV-4jAFhuXmenH8A1Pw9ES8q/view?usp=sharing)
 
 ![Report with claim-level citations and confidence badges next to the live agent trace; Reflection Beam runs counter-searches as a second opinion while the meter shows tokens and cost](docs/screenshot.png)
 
