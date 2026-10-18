@@ -1,5 +1,6 @@
 import { plainCitations } from "@worker/citations.ts";
-import { formatDuration } from "../lib/format.ts";
+import { useState } from "react";
+import { exportFileName, formatDuration } from "../lib/format.ts";
 import type { Run } from "../lib/useResearch.ts";
 import { Report } from "./Report.tsx";
 import { RunStats } from "./RunStats.tsx";
@@ -18,9 +19,31 @@ function downloadMarkdown(run: Run) {
   const url = URL.createObjectURL(new Blob([md], { type: "text/markdown" }));
   const a = document.createElement("a");
   a.href = url;
-  a.download = `due-diligence-${(run.runId ?? "report").slice(0, 8)}.md`;
+  a.download = exportFileName(run.question, "md");
   a.click();
   URL.revokeObjectURL(url);
+}
+
+const EXPORT_BUTTON = "rounded-lg border border-line px-2.5 py-1 font-medium text-fg transition hover:border-line-strong disabled:opacity-40";
+
+function ExportPdfButton({ run }: { run: Run }) {
+  const [state, setState] = useState<"idle" | "busy" | "failed">("idle");
+  const exportPdf = async () => {
+    setState("busy");
+    try {
+      const { downloadReportPdf } = await import("../lib/pdf.ts");
+      await downloadReportPdf(run);
+      setState("idle");
+    } catch (err) {
+      console.error("PDF export failed", err);
+      setState("failed");
+    }
+  };
+  return (
+    <button type="button" onClick={exportPdf} disabled={state === "busy"} className={EXPORT_BUTTON}>
+      {state === "busy" ? "Preparing PDF…" : state === "failed" ? "PDF failed, retry" : "Export PDF"}
+    </button>
+  );
 }
 
 function RunMessage({
@@ -58,13 +81,12 @@ function RunMessage({
             {run.status === "error" && "Run failed"}
           </span>
           {run.final && (
-            <button
-              type="button"
-              onClick={() => downloadMarkdown(run)}
-              className="rounded-lg border border-line px-2.5 py-1 font-medium text-fg transition hover:border-line-strong"
-            >
-              Export .md
-            </button>
+            <span className="flex items-center gap-2">
+              <ExportPdfButton run={run} />
+              <button type="button" onClick={() => downloadMarkdown(run)} className={EXPORT_BUTTON}>
+                Export .md
+              </button>
+            </span>
           )}
         </div>
 

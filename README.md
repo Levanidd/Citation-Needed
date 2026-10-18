@@ -28,6 +28,7 @@ Built for the Nebius Token Factory hackathon on top of the [Token Factory deep a
 | No confidence signal | **Deterministic confidence rule** (never decided by a model): High = verified + supported + (2 independent domains or a primary source); Medium = verified + supported, single secondary source; Low = everything else |
 | No cost visibility | **Live token and cost meter:** tokens per role from every Token Factory response, priced with the per-token prices from the Token Factory model list, plus Tavily credits; a typical report costs about $0.20–0.30 |
 | Terminal output | **Live trace UI:** plan, every search/read decision with the model's own reason, claims as they are recorded, fact-check verdicts, then the streamed report |
+| Report saved to `output.md` | **PDF export for a risk committee:** the report, then an *Evidence* appendix (each `[n]` jumps to its claim: verbatim quote, quote check, verdict, fact-check note, link to the quote in the source), the sources and the run's methodology and cost |
 
 ## How it works
 
@@ -65,7 +66,7 @@ If a model writes tool calls as text instead of native tool calls, the loop fall
   - Roles are configurable separately (`NEBIUS_MODEL_RESEARCH` / `CHECK` / `WRITE`), for example `nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B` as a cheap writer.
 - **Tavily** `/search` (advanced, top 5; `topic: "news"` for the adverse media scan) and `/extract` for page text.
 - **Cloudflare Workers + Hono** for the API and SSE; the same Worker serves the SPA via static assets. A native rate-limit binding allows 5 runs per minute per IP.
-- **React + Vite + Tailwind**; `react-markdown` + `remark-gfm` render the report, citations and badges.
+- **React + Vite + Tailwind**; `react-markdown` + `remark-gfm` render the report, citations and badges. **pdfmake** builds the PDF in the browser from the same Markdown (text PDF with clickable links, Cyrillic-capable Roboto); it is code-split and loads only when you export.
 
 ## Run locally
 
@@ -112,8 +113,8 @@ CI (`.github/workflows/deploy.yml`) typechecks, tests and builds on every push t
 ## Limits and next steps
 
 - A run is capped at 46 external calls (searches, page extracts, model calls) to stay under the Workers free plan's 50-subrequest limit, and at 150 seconds overall. Most of the time is spent waiting on the network, but quote matching on long pages can exceed the free plan's 10 ms CPU limit, so the Workers Paid plan is recommended.
-- Runs are stateless: there is no history, auth or PDF export (Markdown export is built in).
-- Text fragments need a Chromium-based browser or Safari 16.1+, and do not work inside PDFs.
+- Runs are stateless: there is no history or auth. Export a finished report as PDF or Markdown.
+- Text fragments need a Chromium-based browser or Safari 16.1+. Links from the exported PDF use them too, but some PDF viewers drop the `#:~:text=` part and open the page at the top.
 - Next: per-area parallel sub-researchers, persisted runs (D1), a source-quality score per domain, and a "re-check this claim" button.
 
 ## Credits

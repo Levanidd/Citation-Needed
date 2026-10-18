@@ -4,6 +4,8 @@ import { defineConfig } from "vite";
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  // The PDF chunk (pdfmake + embedded fonts, ~1.6 MB) is only loaded when a report is exported.
+  build: { chunkSizeWarningLimit: 1800 },
   resolve: {
     alias: { "@worker": decodeURIComponent(new URL("../worker/src", import.meta.url).pathname) },
   },

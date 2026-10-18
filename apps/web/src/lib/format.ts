@@ -52,6 +52,16 @@ export function modelLabel(id: string): { name: string; lab: string } {
   return { name: MODEL_NAMES[id.toLowerCase()] ?? rest.join("/"), lab: LABS[org.toLowerCase()] ?? org };
 }
 
+/** ("Risks of choosing Supabase", "pdf") → "due-diligence-risks-of-choosing-supabase.pdf" */
+export function exportFileName(question: string, ext: string): string {
+  const slug = question
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, "-")
+    .slice(0, 60)
+    .replace(/^-+|-+$/g, "");
+  return `${slug.startsWith("due-diligence") ? "" : "due-diligence-"}${slug || "report"}.${ext}`;
+}
+
 export function shortUrl(url: string): string {
   try {
     const u = new URL(url);
